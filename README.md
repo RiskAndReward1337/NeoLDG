@@ -17,11 +17,6 @@ This project intentionally focuses on the tuner itself:
 - memory tune, full tune, bypass, antenna toggle, and auto/manual mode controls
 - modern desktop UI with persisted settings
 
-Out of scope for this version:
-
-- amplifier control
-- FlexRadio integration
-- remote TCP bridge mode
 
 ## Why a fresh implementation?
 
@@ -53,7 +48,6 @@ GitHub Releases are built automatically from version tags.
   runtime files.
 - Linux releases are published as an `AppImage`.
 
-To cut a release from GitHub Actions, push a tag such as `v0.1.0`.
 
 ## Hardware Notes
 
