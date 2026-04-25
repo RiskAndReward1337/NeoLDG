@@ -1,0 +1,10 @@
+/build/
+/build-*/
+/AppDir/
+/dist/
+/dist*/
+/.idea/
+/.vs/
+/.vscode/
+*.user
+*.swp

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NeoLDG
+Comment=Modern LDG tuner control utility
+Exec=NeoLDG
+Icon=NeoLDG
+Categories=Utility;HamRadio;
+Terminal=false
+StartupNotify=true
