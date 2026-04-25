@@ -60,7 +60,7 @@ To cut a release from GitHub Actions, push a tag such as `v0.1.0`.
 - Use a TTL-level serial adapter, not a full RS-232 port.
 - The tuner side expects the LDG mini-DIN wiring used by the original control
   cable.
-- Do not connect an S-Video cable in place of the control cable.
+- Before you use an S-Video Cable, please be sure the two "ground" pins are not tied together, some cheaper cables do this, this will kill your tuner. 
 
 ## Protocol Summary
 
