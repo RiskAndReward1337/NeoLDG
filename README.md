@@ -75,10 +75,3 @@ NeoLDG follows the observed LDG control flow used by the original utility:
 The `LDG-600ProII` preset uses the same control protocol with a reduced power
 calibration for watt display.
 
-## Publish Plan
-
-If you split this into its own repository, the cleanest setup is:
-
-1. create a new GitHub repository named `NeoLDG`
-2. copy this directory into that repository root
-3. add screenshots and release packaging once the first hardware test passes
