@@ -42,6 +42,7 @@ private slots:
     void onErrorOccurred(QSerialPort::SerialPortError error);
     void onControlSettled();
     void onResponseTimeout();
+    void onSilentReconnectTimeout();
 
 private:
     enum class RxMode {
@@ -50,9 +51,11 @@ private:
         AwaitingResponse
     };
 
+    bool openSerialPort(const QString& portName, bool announceConnection, bool announceFailure, bool emitConnectionSignal);
     void setBusy(bool busy);
     void emitStatus(const QString& message, bool error = false);
     void resetMeterParser();
+    void beginSilentMeterReconnect();
     void processMeterByte(char byte);
     void sendWakeAndCommand(char command);
     void startCommand(neoldg::ResponseKind kind, char command, const QString& description);
@@ -63,6 +66,7 @@ private:
     QSerialPort serial_;
     QTimer controlSettleTimer_;
     QTimer responseTimer_;
+    QTimer silentReconnectTimer_;
 
     QByteArray meterPayload_;
     int eomCount_ = 0;
@@ -73,5 +77,7 @@ private:
     QString pendingDescription_;
     bool busy_ = false;
     bool bypassActive_ = false;
+    QString reconnectPortName_;
+    bool silentReconnectInProgress_ = false;
+    int silentReconnectAttempts_ = 0;
 };
-

@@ -8,6 +8,8 @@ namespace {
 constexpr int kCommandSettleMs = 60;
 constexpr int kResponseTimeoutMs = 2200;
 constexpr int kReturnToMeterDelayMs = 100;
+constexpr int kSilentReconnectDelayMs = 200;
+constexpr int kMaxSilentReconnectAttempts = 3;
 
 } // namespace
 
@@ -22,11 +24,13 @@ LdgTunerController::LdgTunerController(QObject* parent)
 
     controlSettleTimer_.setSingleShot(true);
     responseTimer_.setSingleShot(true);
+    silentReconnectTimer_.setSingleShot(true);
 
     connect(&serial_, &QSerialPort::readyRead, this, &LdgTunerController::onReadyRead);
     connect(&serial_, &QSerialPort::errorOccurred, this, &LdgTunerController::onErrorOccurred);
     connect(&controlSettleTimer_, &QTimer::timeout, this, &LdgTunerController::onControlSettled);
     connect(&responseTimer_, &QTimer::timeout, this, &LdgTunerController::onResponseTimeout);
+    connect(&silentReconnectTimer_, &QTimer::timeout, this, &LdgTunerController::onSilentReconnectTimeout);
 }
 
 LdgTunerController::~LdgTunerController()
@@ -36,7 +40,7 @@ LdgTunerController::~LdgTunerController()
 
 bool LdgTunerController::isConnected() const
 {
-    return serial_.isOpen();
+    return serial_.isOpen() || silentReconnectInProgress_;
 }
 
 bool LdgTunerController::isBusy() const
@@ -51,40 +55,39 @@ QString LdgTunerController::portName() const
 
 void LdgTunerController::connectSerial(const QString& portName)
 {
+    silentReconnectTimer_.stop();
+    silentReconnectInProgress_ = false;
+    silentReconnectAttempts_ = 0;
+    reconnectPortName_.clear();
+
     if (serial_.isOpen()) {
         disconnectSerial();
     }
 
-    serial_.setPortName(portName);
-    if (!serial_.open(QIODevice::ReadWrite)) {
-        emitStatus(QStringLiteral("Could not open %1: %2").arg(portName, serial_.errorString()), true);
-        emit connectionChanged(false, QString());
-        return;
-    }
-
-    serial_.setDataTerminalReady(true);
-    serial_.clear(QSerialPort::AllDirections);
-    resetMeterParser();
-    rxMode_ = RxMode::Meter;
-    resetPendingCommand();
-
-    sendWakeAndCommand('S');
-    emitStatus(QStringLiteral("Connected to %1. Meter streaming enabled.").arg(portName));
-    emit connectionChanged(true, portName);
+    openSerialPort(portName, true, true, true);
 }
 
 void LdgTunerController::disconnectSerial()
 {
+    const bool wasRecovering = silentReconnectInProgress_;
+    const QString previousPort = wasRecovering ? reconnectPortName_ : serial_.portName();
+
     controlSettleTimer_.stop();
     responseTimer_.stop();
+    silentReconnectTimer_.stop();
     setBusy(false);
     resetPendingCommand();
     resetMeterParser();
     rxMode_ = RxMode::Meter;
+    reconnectPortName_.clear();
+    silentReconnectInProgress_ = false;
+    silentReconnectAttempts_ = 0;
 
     if (serial_.isOpen()) {
-        const QString previousPort = serial_.portName();
         serial_.close();
+        emitStatus(QStringLiteral("Disconnected from %1.").arg(previousPort));
+        emit connectionChanged(false, QString());
+    } else if (wasRecovering && !previousPort.isEmpty()) {
         emitStatus(QStringLiteral("Disconnected from %1.").arg(previousPort));
         emit connectionChanged(false, QString());
     }
@@ -130,6 +133,10 @@ void LdgTunerController::onReadyRead()
 {
     const QByteArray data = serial_.readAll();
     if (data.isEmpty()) {
+        return;
+    }
+
+    if (rxMode_ == RxMode::ControlSettling) {
         return;
     }
 
@@ -188,6 +195,76 @@ void LdgTunerController::onResponseTimeout()
     finishCommand(result);
 }
 
+void LdgTunerController::onSilentReconnectTimeout()
+{
+    if (!silentReconnectInProgress_) {
+        return;
+    }
+
+    if (reconnectPortName_.isEmpty()) {
+        silentReconnectInProgress_ = false;
+        silentReconnectAttempts_ = 0;
+        emit connectionChanged(false, QString());
+        emit tuneOutcomeChanged(neoldg::TuneOutcome::Idle, QStringLiteral("Idle"));
+        return;
+    }
+
+    if (openSerialPort(reconnectPortName_, false, false, false)) {
+        silentReconnectInProgress_ = false;
+        silentReconnectAttempts_ = 0;
+        reconnectPortName_.clear();
+        return;
+    }
+
+    ++silentReconnectAttempts_;
+    if (silentReconnectAttempts_ < kMaxSilentReconnectAttempts) {
+        silentReconnectTimer_.start(kSilentReconnectDelayMs);
+        return;
+    }
+
+    const QString failedPort = reconnectPortName_;
+    reconnectPortName_.clear();
+    silentReconnectInProgress_ = false;
+    silentReconnectAttempts_ = 0;
+    emitStatus(QStringLiteral("Lost meter stream synchronization and could not reopen %1: %2")
+        .arg(failedPort, serial_.errorString()), true);
+    emit connectionChanged(false, QString());
+    emit tuneOutcomeChanged(neoldg::TuneOutcome::Idle, QStringLiteral("Idle"));
+}
+
+bool LdgTunerController::openSerialPort(
+    const QString& portName,
+    bool announceConnection,
+    bool announceFailure,
+    bool emitConnectionSignal)
+{
+    serial_.setPortName(portName);
+    if (!serial_.open(QIODevice::ReadWrite)) {
+        if (announceFailure) {
+            emitStatus(QStringLiteral("Could not open %1: %2").arg(portName, serial_.errorString()), true);
+        }
+        if (emitConnectionSignal) {
+            emit connectionChanged(false, QString());
+        }
+        return false;
+    }
+
+    serial_.setDataTerminalReady(true);
+    serial_.clear(QSerialPort::AllDirections);
+    resetMeterParser();
+    rxMode_ = RxMode::Meter;
+    resetPendingCommand();
+    sendWakeAndCommand('S');
+
+    if (announceConnection) {
+        emitStatus(QStringLiteral("Connected to %1. Meter streaming enabled.").arg(portName));
+    }
+    if (emitConnectionSignal) {
+        emit connectionChanged(true, portName);
+    }
+    return true;
+}
+
 void LdgTunerController::setBusy(bool busy)
 {
     if (busy_ == busy) {
@@ -207,6 +284,27 @@ void LdgTunerController::resetMeterParser()
 {
     meterPayload_.clear();
     eomCount_ = 0;
+}
+
+void LdgTunerController::beginSilentMeterReconnect()
+{
+    if (silentReconnectInProgress_ || rxMode_ != RxMode::Meter || !serial_.isOpen()) {
+        resetMeterParser();
+        return;
+    }
+
+    controlSettleTimer_.stop();
+    responseTimer_.stop();
+    resetPendingCommand();
+    resetMeterParser();
+    rxMode_ = RxMode::Meter;
+    reconnectPortName_ = serial_.portName();
+    silentReconnectInProgress_ = true;
+    silentReconnectAttempts_ = 0;
+
+    serial_.clear(QSerialPort::AllDirections);
+    serial_.close();
+    silentReconnectTimer_.start(kSilentReconnectDelayMs);
 }
 
 void LdgTunerController::processMeterByte(char byte)
@@ -235,8 +333,7 @@ void LdgTunerController::processMeterByte(char byte)
         return;
     }
 
-    emit logMessage(QStringLiteral("Meter stream lost frame alignment. Resynchronizing."));
-    resetMeterParser();
+    beginSilentMeterReconnect();
 }
 
 void LdgTunerController::sendWakeAndCommand(char command)
@@ -259,6 +356,10 @@ void LdgTunerController::sendWakeAndCommand(char command)
 
 void LdgTunerController::startCommand(neoldg::ResponseKind kind, char command, const QString& description)
 {
+    if (silentReconnectInProgress_) {
+        return;
+    }
+
     if (!serial_.isOpen()) {
         emitStatus(QStringLiteral("Connect to a tuner before sending commands."), true);
         return;
