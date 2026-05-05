@@ -1,5 +1,7 @@
 #include "LdgTunerController.hpp"
 
+#include "DiagnosticLogger.hpp"
+
 #include <QtCore/QByteArray>
 #include <QtCore/QTimer>
 
@@ -10,6 +12,20 @@ constexpr int kResponseTimeoutMs = 2200;
 constexpr int kReturnToMeterDelayMs = 100;
 constexpr int kSilentReconnectDelayMs = 200;
 constexpr int kMaxSilentReconnectAttempts = 3;
+
+QString hexByte(char byte)
+{
+    return QStringLiteral("0x%1").arg(QString::number(static_cast<unsigned char>(byte), 16)
+        .toUpper()
+        .rightJustified(2, QChar('0')));
+}
+
+QString hexWord(quint16 value)
+{
+    return QStringLiteral("0x%1").arg(QString::number(value, 16)
+        .toUpper()
+        .rightJustified(4, QChar('0')));
+}
 
 } // namespace
 
@@ -55,6 +71,7 @@ QString LdgTunerController::portName() const
 
 void LdgTunerController::connectSerial(const QString& portName)
 {
+    DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Connect requested for %1.").arg(portName));
     silentReconnectTimer_.stop();
     silentReconnectInProgress_ = false;
     silentReconnectAttempts_ = 0;
@@ -71,6 +88,8 @@ void LdgTunerController::disconnectSerial()
 {
     const bool wasRecovering = silentReconnectInProgress_;
     const QString previousPort = wasRecovering ? reconnectPortName_ : serial_.portName();
+    DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Disconnect requested. port=%1 recovering=%2 open=%3")
+        .arg(previousPort, wasRecovering ? QStringLiteral("true") : QStringLiteral("false"), serial_.isOpen() ? QStringLiteral("true") : QStringLiteral("false")));
 
     controlSettleTimer_.stop();
     responseTimer_.stop();
@@ -136,7 +155,17 @@ void LdgTunerController::onReadyRead()
         return;
     }
 
+    DiagnosticLogger::instance().verbose(QStringLiteral("serial"), QStringLiteral("readyRead bytes=%1 rxMode=%2 payload=%3 eom=%4 busy=%5 recovering=%6")
+        .arg(data.size())
+        .arg(static_cast<int>(rxMode_))
+        .arg(meterPayload_.size())
+        .arg(eomCount_)
+        .arg(busy_ ? QStringLiteral("true") : QStringLiteral("false"))
+        .arg(silentReconnectInProgress_ ? QStringLiteral("true") : QStringLiteral("false")));
+    DiagnosticLogger::instance().serialBytes(QStringLiteral("RX"), data);
+
     if (rxMode_ == RxMode::ControlSettling) {
+        DiagnosticLogger::instance().verbose(QStringLiteral("serial"), QStringLiteral("Discarded %1 bytes while waiting for control mode to settle.").arg(data.size()));
         return;
     }
 
@@ -145,10 +174,13 @@ void LdgTunerController::onReadyRead()
             if (static_cast<unsigned char>(byte) >= 0x30U) {
                 responseTimer_.stop();
                 const auto result = neoldg::interpretCommandResponse(pendingKind_, QChar::fromLatin1(byte));
+                DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Received command response %1 for %2. success=%3")
+                    .arg(hexByte(byte), pendingDescription_, result.success ? QStringLiteral("true") : QStringLiteral("false")));
                 finishCommand(result);
                 return;
             }
         }
+        DiagnosticLogger::instance().verbose(QStringLiteral("serial"), QStringLiteral("Awaiting response; ignored %1 bytes below response threshold.").arg(data.size()));
         return;
     }
 
@@ -162,6 +194,11 @@ void LdgTunerController::onErrorOccurred(QSerialPort::SerialPortError error)
     if (error == QSerialPort::NoError) {
         return;
     }
+
+    DiagnosticLogger::instance().warning(QStringLiteral("serial"), QStringLiteral("Serial error occurred. code=%1 text=%2 open=%3 recovering=%4")
+        .arg(static_cast<int>(error))
+        .arg(serial_.errorString(), serial_.isOpen() ? QStringLiteral("true") : QStringLiteral("false"))
+        .arg(silentReconnectInProgress_ ? QStringLiteral("true") : QStringLiteral("false")));
 
     if (error == QSerialPort::ResourceError || error == QSerialPort::PermissionError || error == QSerialPort::DeviceNotFoundError) {
         emitStatus(QStringLiteral("Serial error: %1").arg(serial_.errorString()), true);
@@ -178,6 +215,8 @@ void LdgTunerController::onControlSettled()
     serial_.clear(QSerialPort::Input);
     resetMeterParser();
     rxMode_ = RxMode::AwaitingResponse;
+    DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Control mode settled. Sending command %1 for %2.")
+        .arg(hexByte(pendingCommand_), pendingDescription_));
     sendWakeAndCommand(pendingCommand_);
     responseTimer_.start(kResponseTimeoutMs);
     emit logMessage(QStringLiteral("Sent %1 command.").arg(pendingDescription_));
@@ -185,6 +224,8 @@ void LdgTunerController::onControlSettled()
 
 void LdgTunerController::onResponseTimeout()
 {
+    DiagnosticLogger::instance().error(QStringLiteral("serial"), QStringLiteral("Response timeout for command %1 (%2).")
+        .arg(hexByte(pendingCommand_), pendingDescription_));
     emitStatus(QStringLiteral("Timed out waiting for the %1 response.").arg(pendingDescription_), true);
 
     neoldg::CommandResult result;
@@ -202,6 +243,7 @@ void LdgTunerController::onSilentReconnectTimeout()
     }
 
     if (reconnectPortName_.isEmpty()) {
+        DiagnosticLogger::instance().error(QStringLiteral("serial"), QStringLiteral("Silent reconnect aborted because the reconnect port was empty."));
         silentReconnectInProgress_ = false;
         silentReconnectAttempts_ = 0;
         emit connectionChanged(false, QString());
@@ -210,6 +252,9 @@ void LdgTunerController::onSilentReconnectTimeout()
     }
 
     if (openSerialPort(reconnectPortName_, false, false, false)) {
+        DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Silent meter stream reconnect succeeded on %1 after %2 attempt(s).")
+            .arg(reconnectPortName_)
+            .arg(silentReconnectAttempts_ + 1));
         silentReconnectInProgress_ = false;
         silentReconnectAttempts_ = 0;
         reconnectPortName_.clear();
@@ -217,6 +262,9 @@ void LdgTunerController::onSilentReconnectTimeout()
     }
 
     ++silentReconnectAttempts_;
+    DiagnosticLogger::instance().warning(QStringLiteral("serial"), QStringLiteral("Silent reconnect attempt %1 failed for %2: %3")
+        .arg(silentReconnectAttempts_)
+        .arg(reconnectPortName_, serial_.errorString()));
     if (silentReconnectAttempts_ < kMaxSilentReconnectAttempts) {
         silentReconnectTimer_.start(kSilentReconnectDelayMs);
         return;
@@ -226,6 +274,8 @@ void LdgTunerController::onSilentReconnectTimeout()
     reconnectPortName_.clear();
     silentReconnectInProgress_ = false;
     silentReconnectAttempts_ = 0;
+    DiagnosticLogger::instance().error(QStringLiteral("serial"), QStringLiteral("Silent reconnect failed permanently for %1: %2")
+        .arg(failedPort, serial_.errorString()));
     emitStatus(QStringLiteral("Lost meter stream synchronization and could not reopen %1: %2")
         .arg(failedPort, serial_.errorString()), true);
     emit connectionChanged(false, QString());
@@ -240,6 +290,7 @@ bool LdgTunerController::openSerialPort(
 {
     serial_.setPortName(portName);
     if (!serial_.open(QIODevice::ReadWrite)) {
+        DiagnosticLogger::instance().warning(QStringLiteral("serial"), QStringLiteral("Open failed for %1: %2").arg(portName, serial_.errorString()));
         if (announceFailure) {
             emitStatus(QStringLiteral("Could not open %1: %2").arg(portName, serial_.errorString()), true);
         }
@@ -255,6 +306,8 @@ bool LdgTunerController::openSerialPort(
     rxMode_ = RxMode::Meter;
     resetPendingCommand();
     sendWakeAndCommand('S');
+    DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Opened %1 and requested meter streaming. announce=%2 signal=%3")
+        .arg(portName, announceConnection ? QStringLiteral("true") : QStringLiteral("false"), emitConnectionSignal ? QStringLiteral("true") : QStringLiteral("false")));
 
     if (announceConnection) {
         emitStatus(QStringLiteral("Connected to %1. Meter streaming enabled.").arg(portName));
@@ -286,12 +339,27 @@ void LdgTunerController::resetMeterParser()
     eomCount_ = 0;
 }
 
-void LdgTunerController::beginSilentMeterReconnect()
+void LdgTunerController::beginSilentMeterReconnect(char offendingByte)
 {
     if (silentReconnectInProgress_ || rxMode_ != RxMode::Meter || !serial_.isOpen()) {
+        DiagnosticLogger::instance().warning(QStringLiteral("serial"), QStringLiteral("Parser reset without reconnect. offending=%1 rxMode=%2 open=%3 recovering=%4 payload=%5 eom=%6")
+            .arg(hexByte(offendingByte))
+            .arg(static_cast<int>(rxMode_))
+            .arg(serial_.isOpen() ? QStringLiteral("true") : QStringLiteral("false"))
+            .arg(silentReconnectInProgress_ ? QStringLiteral("true") : QStringLiteral("false"))
+            .arg(meterPayload_.size())
+            .arg(eomCount_));
         resetMeterParser();
         return;
     }
+
+    DiagnosticLogger::instance().warning(QStringLiteral("serial"), QStringLiteral("Meter stream lost frame alignment. offending=%1 port=%2 payload=%3 eom=%4 busy=%5 pending=%6")
+        .arg(hexByte(offendingByte), serial_.portName())
+        .arg(meterPayload_.size())
+        .arg(eomCount_)
+        .arg(busy_ ? QStringLiteral("true") : QStringLiteral("false"))
+        .arg(pendingDescription_.isEmpty() ? QStringLiteral("none") : pendingDescription_));
+    DiagnosticLogger::instance().serialBytes(QStringLiteral("DESYNC_PAYLOAD"), meterPayload_ + QByteArray(1, offendingByte));
 
     controlSettleTimer_.stop();
     responseTimer_.stop();
@@ -325,6 +393,8 @@ void LdgTunerController::processMeterByte(char byte)
                     | static_cast<quint16>(static_cast<unsigned char>(meterPayload_[3]));
                 sample.bandKey = (static_cast<quint16>(static_cast<unsigned char>(meterPayload_[4])) << 8)
                     | static_cast<quint16>(static_cast<unsigned char>(meterPayload_[5]));
+                DiagnosticLogger::instance().verbose(QStringLiteral("serial"), QStringLiteral("Meter frame fwd=%1 ref=%2 band=%3")
+                    .arg(hexWord(sample.forwardRaw), hexWord(sample.reflectedRaw), hexWord(sample.bandKey)));
                 emit meterSampleUpdated(sample);
             }
 
@@ -333,7 +403,7 @@ void LdgTunerController::processMeterByte(char byte)
         return;
     }
 
-    beginSilentMeterReconnect();
+    beginSilentMeterReconnect(byte);
 }
 
 void LdgTunerController::sendWakeAndCommand(char command)
@@ -344,19 +414,23 @@ void LdgTunerController::sendWakeAndCommand(char command)
 
     serial_.write(QByteArray(1, ' '));
     serial_.flush();
+    DiagnosticLogger::instance().verbose(QStringLiteral("serial"), QStringLiteral("TX wake byte for command %1.").arg(hexByte(command)));
 
     QTimer::singleShot(2, this, [this, command]() {
         if (!serial_.isOpen()) {
+            DiagnosticLogger::instance().warning(QStringLiteral("serial"), QStringLiteral("Skipped command %1 because serial port closed before delayed send.").arg(hexByte(command)));
             return;
         }
         serial_.write(QByteArray(1, command));
         serial_.flush();
+        DiagnosticLogger::instance().verbose(QStringLiteral("serial"), QStringLiteral("TX command %1.").arg(hexByte(command)));
     });
 }
 
 void LdgTunerController::startCommand(neoldg::ResponseKind kind, char command, const QString& description)
 {
     if (silentReconnectInProgress_) {
+        DiagnosticLogger::instance().warning(QStringLiteral("serial"), QStringLiteral("Ignored %1 command while silent reconnect is active.").arg(description));
         return;
     }
 
@@ -375,6 +449,9 @@ void LdgTunerController::startCommand(neoldg::ResponseKind kind, char command, c
     pendingDescription_ = description;
     rxMode_ = RxMode::ControlSettling;
     setBusy(true);
+    DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Starting command %1 (%2), kind=%3.")
+        .arg(hexByte(command), description)
+        .arg(static_cast<int>(kind)));
 
     if (kind == neoldg::ResponseKind::MemoryTune || kind == neoldg::ResponseKind::FullTune) {
         emit tuneOutcomeChanged(neoldg::TuneOutcome::InProgress, QStringLiteral("Tuning"));
@@ -387,6 +464,11 @@ void LdgTunerController::startCommand(neoldg::ResponseKind kind, char command, c
 
 void LdgTunerController::finishCommand(const neoldg::CommandResult& result)
 {
+    DiagnosticLogger::instance().info(QStringLiteral("serial"), QStringLiteral("Command finished. kind=%1 code=%2 success=%3 summary=%4")
+        .arg(static_cast<int>(result.kind))
+        .arg(result.code)
+        .arg(result.success ? QStringLiteral("true") : QStringLiteral("false"), result.summary));
+
     if (result.kind == neoldg::ResponseKind::Bypass && result.success) {
         bypassActive_ = true;
     } else if (result.kind == neoldg::ResponseKind::AutoTune && result.success) {

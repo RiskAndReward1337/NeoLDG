@@ -55,7 +55,7 @@ private:
     void setBusy(bool busy);
     void emitStatus(const QString& message, bool error = false);
     void resetMeterParser();
-    void beginSilentMeterReconnect();
+    void beginSilentMeterReconnect(char offendingByte);
     void processMeterByte(char byte);
     void sendWakeAndCommand(char command);
     void startCommand(neoldg::ResponseKind kind, char command, const QString& description);

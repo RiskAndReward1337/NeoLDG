@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 
+#include "DiagnosticLogger.hpp"
 #include "LdgTunerController.hpp"
 
 #include <QtCore/QDir>
@@ -10,6 +11,7 @@
 #include <QtCore/QTimer>
 #include <QtGui/QColor>
 #include <QtGui/QCloseEvent>
+#include <QtGui/QDesktopServices>
 #include <QtSerialPort/QSerialPortInfo>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
@@ -27,6 +29,7 @@
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
+#include <QtCore/QUrl>
 
 #include <algorithm>
 #include <cmath>
@@ -343,6 +346,27 @@ void MainWindow::buildUi()
     peakHoldSpin_->setSuffix(QStringLiteral(" s"));
     peakHoldSpin_->setObjectName(QStringLiteral("fieldInput"));
     settingsBody->addWidget(peakHoldSpin_);
+
+    QVBoxLayout* diagnosticsBody = nullptr;
+    diagnosticsCard_ = createCard(QStringLiteral("Diagnostics"), diagnosticsBody);
+    rightColumnLayout_->addWidget(diagnosticsCard_);
+
+    verboseLoggingCheck_ = new QCheckBox(QStringLiteral("Verbose diagnostic logging"));
+    verboseLoggingCheck_->setObjectName(QStringLiteral("checkbox"));
+    diagnosticsBody->addWidget(verboseLoggingCheck_);
+
+    auto* logPathKey = new QLabel(QStringLiteral("Current Log"));
+    logPathKey->setObjectName(QStringLiteral("fieldLabel"));
+    diagnosticsBody->addWidget(logPathKey);
+
+    logPathValue_ = new QLabel();
+    logPathValue_->setObjectName(QStringLiteral("detailValue"));
+    logPathValue_->setWordWrap(true);
+    logPathValue_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    diagnosticsBody->addWidget(logPathValue_);
+
+    openLogFolderButton_ = new QPushButton(QStringLiteral("Open Log Folder"));
+    diagnosticsBody->addWidget(openLogFolderButton_);
 
     QVBoxLayout* metricsCaptureBody = nullptr;
     metricsCaptureCard_ = createCard(QStringLiteral("Metrics Export"), metricsCaptureBody);
@@ -696,6 +720,16 @@ void MainWindow::bindSignals()
 
     connect(exportMetricsButton_, &QPushButton::clicked, this, &MainWindow::exportMetricHistory);
     connect(clearMetricsButton_, &QPushButton::clicked, this, &MainWindow::clearMetricHistory);
+    connect(openLogFolderButton_, &QPushButton::clicked, this, &MainWindow::openDiagnosticLogFolder);
+
+    connect(verboseLoggingCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
+        DiagnosticLogger::instance().setVerboseEnabled(enabled);
+        settings_.setValue(QStringLiteral("diagnostics/verboseLogging"), enabled);
+        appendLog(enabled
+            ? QStringLiteral("Verbose diagnostic logging enabled.")
+            : QStringLiteral("Verbose diagnostic logging disabled."));
+        updateDiagnosticsUi();
+    });
 
     connect(modelCombo_, &QComboBox::currentIndexChanged, this, [this]() {
         recomputeTelemetryForSettings();
@@ -786,6 +820,9 @@ void MainWindow::restoreSettings()
     }
 
     autoConnectCheck_->setChecked(settings_.value(QStringLiteral("serial/autoConnect"), false).toBool());
+    verboseLoggingCheck_->setChecked(settings_.value(QStringLiteral("diagnostics/verboseLogging"), false).toBool());
+    DiagnosticLogger::instance().setVerboseEnabled(verboseLoggingCheck_->isChecked());
+    updateDiagnosticsUi();
     peakHoldCheck_->setChecked(settings_.value(QStringLiteral("meter/peakHold"), true).toBool());
     peakHoldSpin_->setValue(settings_.value(QStringLiteral("meter/peakHoldSeconds"), 0.25).toDouble());
     peakHoldSpin_->setEnabled(peakHoldCheck_->isChecked());
@@ -809,6 +846,7 @@ void MainWindow::saveSettings()
         layoutMode_ == LayoutMode::Minimal ? QStringLiteral("minimal") : QStringLiteral("full"));
     settings_.setValue(QStringLiteral("serial/port"), portCombo_->currentData().toString());
     settings_.setValue(QStringLiteral("serial/autoConnect"), autoConnectCheck_->isChecked());
+    settings_.setValue(QStringLiteral("diagnostics/verboseLogging"), verboseLoggingCheck_->isChecked());
     settings_.setValue(QStringLiteral("tuner/model"), neoldg::tunerModelStorageKey(selectedTunerModel()));
     settings_.setValue(QStringLiteral("meter/supplyVoltage"), selectedSupplyVoltage());
     settings_.setValue(QStringLiteral("meter/peakHold"), peakHoldCheck_->isChecked());
@@ -834,6 +872,9 @@ void MainWindow::applyLayoutMode(LayoutMode mode)
     }
     if (settingsCard_ != nullptr) {
         settingsCard_->setVisible(!minimal);
+    }
+    if (diagnosticsCard_ != nullptr) {
+        diagnosticsCard_->setVisible(!minimal);
     }
     if (metricsCaptureCard_ != nullptr) {
         metricsCaptureCard_->setVisible(!minimal);
@@ -992,6 +1033,16 @@ void MainWindow::updateMetricHistoryUi()
     }
 }
 
+void MainWindow::updateDiagnosticsUi()
+{
+    if (logPathValue_ != nullptr) {
+        logPathValue_->setText(DiagnosticLogger::instance().logFilePath());
+    }
+    if (openLogFolderButton_ != nullptr) {
+        openLogFolderButton_->setEnabled(!DiagnosticLogger::instance().logDirectoryPath().isEmpty());
+    }
+}
+
 void MainWindow::clearMetricHistory()
 {
     metricHistory_.clear();
@@ -1045,6 +1096,19 @@ void MainWindow::exportMetricHistory()
     appendLog(QStringLiteral("Exported %1 metric samples to %2.").arg(metricHistory_.size()).arg(filePath));
 }
 
+void MainWindow::openDiagnosticLogFolder()
+{
+    const QString folderPath = DiagnosticLogger::instance().logDirectoryPath();
+    if (folderPath.isEmpty()) {
+        appendLog(QStringLiteral("No diagnostic log folder is available."), true);
+        return;
+    }
+
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(folderPath))) {
+        appendLog(QStringLiteral("Could not open diagnostic log folder: %1").arg(folderPath), true);
+    }
+}
+
 void MainWindow::setTone(QWidget* widget, const QString& tone)
 {
     widget->setProperty("tone", tone);
@@ -1086,6 +1150,12 @@ void MainWindow::setTuneOutcome(neoldg::TuneOutcome outcome, const QString& labe
 
 void MainWindow::appendLog(const QString& message, bool error)
 {
+    if (error) {
+        DiagnosticLogger::instance().warning(QStringLiteral("ui"), message);
+    } else {
+        DiagnosticLogger::instance().info(QStringLiteral("ui"), message);
+    }
+
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss"));
     auto* item = new QListWidgetItem(QStringLiteral("[%1] %2").arg(timestamp, message));
     if (error) {

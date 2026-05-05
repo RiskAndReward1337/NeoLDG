@@ -48,6 +48,16 @@ GitHub Releases are built automatically from version tags.
   runtime files.
 - Linux releases are published as an `AppImage`.
 
+## Diagnostics
+
+NeoLDG creates a diagnostic log file on each launch and keeps the most recent
+logs in the app data folder. The Diagnostics panel shows the current log path,
+opens the log folder, and can enable verbose logging for serial byte stream and
+meter parser recovery details.
+
+Verbose logs are especially useful when debugging stream alignment loss, USB
+serial dropouts, or suspected RFI-related serial corruption.
+
 
 ## Hardware Notes
 
@@ -68,4 +78,3 @@ NeoLDG follows the observed LDG control flow used by the original utility:
 
 The `LDG-600ProII` preset uses the same control protocol with a reduced power
 calibration for watt display.
-

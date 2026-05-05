@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(NeoLDG VERSION 0.1.1 LANGUAGES CXX)
+project(NeoLDG VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,12 +14,19 @@ qt_standard_project_setup()
 
 qt_add_executable(NeoLDG
     src/main.cpp
+    src/DiagnosticLogger.cpp
+    src/DiagnosticLogger.hpp
     src/LdgProtocol.cpp
     src/LdgProtocol.hpp
     src/LdgTunerController.cpp
     src/LdgTunerController.hpp
     src/MainWindow.cpp
     src/MainWindow.hpp
+)
+
+target_compile_definitions(NeoLDG
+    PRIVATE
+        NEOLDG_VERSION="${PROJECT_VERSION}"
 )
 
 target_link_libraries(NeoLDG

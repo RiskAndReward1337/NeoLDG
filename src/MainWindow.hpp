@@ -64,8 +64,10 @@ private:
     void recomputeTelemetryForSettings();
     void recordMetricHistorySample();
     void updateMetricHistoryUi();
+    void updateDiagnosticsUi();
     void clearMetricHistory();
     void exportMetricHistory();
+    void openDiagnosticLogFolder();
     double selectedSupplyVoltage() const;
     double selectedPeakHoldSeconds() const;
     neoldg::TunerModel selectedTunerModel() const;
@@ -83,6 +85,7 @@ private:
 
     QComboBox* portCombo_ = nullptr;
     QCheckBox* autoConnectCheck_ = nullptr;
+    QCheckBox* verboseLoggingCheck_ = nullptr;
     QComboBox* modelCombo_ = nullptr;
     QComboBox* voltageCombo_ = nullptr;
     QCheckBox* peakHoldCheck_ = nullptr;
@@ -99,6 +102,7 @@ private:
     QPushButton* manualModeButton_ = nullptr;
     QPushButton* exportMetricsButton_ = nullptr;
     QPushButton* clearMetricsButton_ = nullptr;
+    QPushButton* openLogFolderButton_ = nullptr;
 
     QLabel* connectionPill_ = nullptr;
     QLabel* tunePill_ = nullptr;
@@ -113,6 +117,7 @@ private:
     QLabel* rawFwdValue_ = nullptr;
     QLabel* rawRefValue_ = nullptr;
     QLabel* metricsCountValue_ = nullptr;
+    QLabel* logPathValue_ = nullptr;
 
     QProgressBar* fwdBar_ = nullptr;
     QProgressBar* refBar_ = nullptr;
@@ -126,6 +131,7 @@ private:
     QFrame* connectionCard_ = nullptr;
     QFrame* controlsCard_ = nullptr;
     QFrame* settingsCard_ = nullptr;
+    QFrame* diagnosticsCard_ = nullptr;
     QFrame* metricsCaptureCard_ = nullptr;
     QWidget* metricsRow_ = nullptr;
     QWidget* rightColumnSpacer_ = nullptr;
